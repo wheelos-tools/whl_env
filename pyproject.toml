@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=42"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "whl-env"
+version = "0.0.1"
+description = "wheelos env tool"
+readme = "README.md"
+authors = [
+  { name = "daohu527", email = "daohu527@gmail.com" }
+]
+urls = { Homepage = "https://github.com/wheelos-tools/whl_env", "Bug Tracker" = "https://github.com/wheelos-tools/whl_env/issues" }
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+  "Intended Audience :: Developers",
+  "Topic :: Scientific/Engineering :: GIS",
+  "Programming Language :: Python :: 3 :: Only"
+]
+requires-python = ">=3.6"
+dependencies = [
+  # todo: add dependencies
+]
+
+keywords = ["whl_env", "wheelos",]
+
+[project.scripts]
+whl_env = "whl_env.main:main"
+
+[tool.setuptools]
+package-dir = { "" = "." }
+
+[tool.setuptools.packages.find]
+where = ["."]
