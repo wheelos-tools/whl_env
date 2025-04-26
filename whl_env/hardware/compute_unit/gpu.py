@@ -125,16 +125,6 @@ def get_gpu_info() -> Dict[str, Any]:
                 errors.append(
                     f"Error parsing nvidia-smi output line '{line}': {e}")
                 logging.error(errors[-1])
-
-    elif not success:
-        # Handle command execution errors for nvidia-smi
-        if "command not found" in output.lower():
-            logging.info(
-                "nvidia-smi command not found. This might indicate no NVIDIA GPUs or driver not installed.")
-            # This is informational, not a critical error if no NVIDIA GPU is expected
-        else:
-            errors.append(f"Error executing nvidia-smi: {output}")
-            logging.error(errors[-1])
     else:
         # success is True but output is empty - unlikely for nvidia-smi if GPUs are present
         logging.info("nvidia-smi returned no output.")

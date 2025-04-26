@@ -46,7 +46,7 @@ def main():
         help="Path to the output JSON file (default: system_info.json)"
     )
     parser.add_argument(
-        "--version",
+        "-v", "--version",
         action="version",
         version=f"%(prog)s {whl_env.__version__}",
         help="Display the script's version and exit."
