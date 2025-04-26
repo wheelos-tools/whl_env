@@ -19,7 +19,8 @@ import hashlib
 import os
 import glob
 import sys
-from typing import Dict, List, Optional
+import json
+from typing import Dict, List, Optional, Any
 
 
 def get_file_hash(filepath: str, hash_algorithm: str = 'sha256') -> str:
@@ -171,3 +172,22 @@ def read_sys_file(filepath: str) -> Optional[str]:
     except (PermissionError, OSError) as e:
         # print(f"Warning: Could not read sysfs file {filepath}: {e}", file=sys.stderr) # Optional warning
         return None
+
+
+def save_json(data: Dict[str, Any], filename: str = "system_info.json") -> None:
+    """
+    Saves a dictionary containing system information to a JSON file.
+
+    Args:
+        data (Dict[str, Any]): The dictionary containing the system information.
+        filename (str): The name of the file to save the JSON data to.
+                        Defaults to "system_info.json".
+    """
+    try:
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+        print(f"System information successfully saved to {filename}")
+    except IOError as e:
+        print(f"Error saving system information to {filename}: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred while saving the file: {e}")

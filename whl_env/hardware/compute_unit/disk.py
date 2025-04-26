@@ -18,7 +18,7 @@ import logging
 import re       # Needed for parsing key="value" format or df/fstab
 from typing import Dict, List, Any
 
-from whl_env.utils import run_command  # Using the user's specified import
+from whl_env.utils import run_command
 
 
 # Configure basic logging if not already configured
@@ -95,9 +95,9 @@ def get_disk_info_lsblk() -> Dict[str, Any]:
     lsblk_cmd = ['lsblk', '-b', '-P', '-o',
                  'NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE,MODEL']
     logging.info(f"Running command: {' '.join(lsblk_cmd)}")
-    success, output = run_command(lsblk_cmd, timeout=10)
+    output = run_command(lsblk_cmd, timeout=10)
 
-    if success and output:
+    if output:
         logging.info("lsblk command successful. Parsing output...")
         # Parse the key="value" output format
         disk_list_raw = parse_lsblk_pairs(output)
@@ -137,17 +137,6 @@ def get_disk_info_lsblk() -> Dict[str, Any]:
             disk_list.append(dev_info)
 
         storage_info['devices'] = disk_list
-
-    elif not success:
-        # Handle command execution errors
-        if "command not found" in output.lower():
-            err_msg = "lsblk command not found. Cannot list storage devices."
-            errors.append(err_msg)
-            logging.error(err_msg)
-        else:
-            err_msg = f"Error executing lsblk: {output}"
-            errors.append(err_msg)
-            logging.error(err_msg)
     else:  # success is True but output is empty - indicates no block devices?
         info_msg = "lsblk returned no output. No block devices found?"
         storage_info['info'] = info_msg
@@ -182,9 +171,9 @@ def get_filesystem_usage() -> Dict[str, Any]:
     # Output columns (with -P): Filesystem, 1-blocks, Used, Available, Capacity, Mounted on
     df_cmd = ['df', '-P', '-B1']
     logging.info(f"Running command: {' '.join(df_cmd)}")
-    success, output = run_command(df_cmd, timeout=10)
+    output = run_command(df_cmd, timeout=10)
 
-    if success and output:
+    if output:
         logging.info("df command successful. Parsing output...")
         lines = output.strip().split('\n')
         if len(lines) > 1:  # Skip header line
@@ -242,16 +231,6 @@ def get_filesystem_usage() -> Dict[str, Any]:
         else:
             # Should not happen if output is not empty and > 1 line check passed
             pass  # Handled by empty output check below
-
-    elif not success:
-        if "command not found" in output.lower():
-            err_msg = "df command not found. Cannot get filesystem usage."
-            errors.append(err_msg)
-            logging.error(err_msg)
-        else:
-            err_msg = f"Error executing df: {output}"
-            errors.append(err_msg)
-            logging.error(err_msg)
     else:  # success is True but output is empty
         info_msg = "df returned no output. No mounted filesystems?"
         fs_usage_info['info'] = info_msg

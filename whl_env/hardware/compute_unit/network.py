@@ -64,9 +64,9 @@ def get_network_info() -> Dict[str, Any]:
     # This command lists interfaces and their addresses
     ip_command = ['ip', 'address', 'show']
     logging.info(f"Running command: {' '.join(ip_command)}")
-    success, output = run_command(ip_command, timeout=10)
+    output = run_command(ip_command, timeout=10)
 
-    if success and output:
+    if output:
         # Parse the output of 'ip address show'
         # The output format is block-based, starting with a number and colon (e.g., "1: lo: ...")
         # Subsequent lines for the same interface are indented.
@@ -180,7 +180,7 @@ def get_network_info() -> Dict[str, Any]:
 
         network_info['interfaces'] = interface_list
 
-    elif not success:
+    elif output is None:
         # Handle command execution errors
         error_message = f"Error executing '{' '.join(ip_command)}': {output}"
         errors.append(error_message)

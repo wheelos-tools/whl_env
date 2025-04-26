@@ -19,9 +19,9 @@ import logging
 import os
 import glob  # For finding sensor files in sysfs
 import re   # For parsing sensor file names and labels
-import json  # For parsing 'sensors -j' output if available
+import json
 # Added List for run_command signature
-from typing import Dict, Any
+from typing import Dict, Any, Callable
 
 from whl_env.utils import run_command
 
@@ -231,159 +231,109 @@ def get_hardware_sensors_info() -> Dict[str, Any]:
         logging.info("No power_supply info found in sysfs.")
 
     # --- 2. Collect data using command-line tools (fallbacks/specific data) ---
-
-    # 2a. lm-sensors via 'sensors -j' (provides comprehensive data if configured)
-    # This often duplicates sysfs but can provide more context and reach sensors
-    # not exposed cleanly via standard hwmon labels. We can use it as a fallback
-    # or to augment data. Let's try to use it as a potential source to fill gaps
-    # or provide better labels if sysfs parsing was insufficient.
-    logging.info("Attempting to get sensor data via 'sensors -j'...")
-    sensors_cmd = ['sensors', '-j']
-    success_sensors, output_sensors = run_command(sensors_cmd, timeout=10)
-
-    if success_sensors and output_sensors:
-        logging.info("'sensors -j' command successful. Parsing JSON output...")
-        try:
-            sensors_json = json.loads(output_sensors)
-            # sensors_json structure is {adapter_name: {chip_name: {sensor_name: {unit: value, ...}}}}
-
-            for adapter_name, chips in sensors_json.items():
-                # Skip common virtual/less useful ones
-                if adapter_name in ["acpitz-virtual-0", "thinkpad-isa-0000"]:
-                    continue  # Example filtering
-
-                for chip_name, sensors in chips.items():
-                    for sensor_key, details in sensors.items():
-                        # sensor_key is like "temp1", "fan2", "in0"
-                        # details is like {"temp1_input": 45.0, "temp1_max": 80.0, "temp1_label": "Package id 0"}
-
-                        # Use label if available
-                        sensor_label = details.get(
-                            f"{sensor_key}_label", sensor_key)
-                        # Key for the actual value
-                        sensor_input_key = f"{sensor_key}_input"
-
-                        if sensor_input_key in details:
-                            value = details[sensor_input_key]
-                            # e.g., "coretemp_Package id 0"
-                            full_sensor_name = f"{chip_name}_{sensor_label}"
-
-                            if sensor_key.startswith('temp'):
-                                if isinstance(value, (int, float)):
-                                    # sensors output is already in Celsius
-                                    sensor_data["temperatures_celsius"][full_sensor_name] = value
-                                    logging.debug(
-                                        f"Read sensors temp: {full_sensor_name}={value}°C")
-
-                            elif sensor_key.startswith('fan'):
-                                if isinstance(value, (int, float)) and value >= 0:
-                                    # sensors output is usually already in RPM
-                                    sensor_data["fan_speeds_rpm"][full_sensor_name] = value
-                                    logging.debug(
-                                        f"Read sensors fan: {full_sensor_name}={value} RPM")
-
-                            elif sensor_key.startswith('in'):
-                                if isinstance(value, (int, float)):
-                                    # sensors output is usually already in Volts
-                                    sensor_data["voltages_volts"][full_sensor_name] = value
-                                    logging.debug(
-                                        f"Read sensors voltage: {full_sensor_name}={value} V")
-
-            if not sensor_data["temperatures_celsius"] and not sensor_data["fan_speeds_rpm"] and not sensor_data["voltages_volts"]:
-                sensor_data["notes"].append(
-                    "'sensors -j' executed but no temperature, fan, or voltage data was parsed.")
-                logging.warning(
-                    "'sensors -j' executed but no temperature, fan, or voltage data was parsed.")
-
-        except json.JSONDecodeError as e:
-            err_msg = f"Error parsing JSON output from 'sensors -j': {e}"
-            sensor_data["errors"].append(err_msg)
-            logging.error(err_msg)
-        except Exception as e:
-            err_msg = f"Unexpected error parsing 'sensors -j' output: {e}"
-            sensor_data["errors"].append(err_msg)
-            logging.error(err_msg)
-
-    elif not success_sensors:
-        if "command not found" in output_sensors.lower():
-            sensor_data["notes"].append(
-                "'sensors' command not found (lm-sensors not installed or in PATH).")
-            logging.warning("'sensors' command not found.")
-        else:
-            err_msg = f"Error executing 'sensors -j': {output_sensors}"
-            sensor_data["errors"].append(err_msg)
-            logging.error(err_msg)
-    # else: success_sensors is True but output_sensors is empty (unlikely for sensors -j if sensors exist)
-
     # 2b. nvidia-smi (specific for NVIDIA GPUs)
     # This provides GPU temperature and power draw if an NVIDIA GPU is present and driver is installed.
     logging.info("Attempting to get NVIDIA GPU info via nvidia-smi...")
+    logging.info("Attempting to get NVIDIA GPU info via nvidia-smi...")
+
     nvidia_smi_cmd = [
         'nvidia-smi',
         '--query-gpu=name,temperature.gpu,power.draw',
-        '--format=csv,noheader'
+        '--format=csv,noheader'  # Requesting CSV format without header
     ]
-    success_nvidia, output_nvidia = run_command(nvidia_smi_cmd, timeout=5)
 
-    if success_nvidia and output_nvidia:
+    # --- Optimization based on run_command return value ---
+    # run_command returns Optional[str]: the output string on success, or None on any failure.
+    # Increased timeout slightly just in case
+    output_nvidia = run_command(nvidia_smi_cmd, timeout=15)
+
+    if output_nvidia is not None:
+        # The command succeeded and returned output. Proceed with parsing.
         logging.info("'nvidia-smi' command successful. Parsing output...")
+
         # Expected CSV format: name, temperature.gpu [C], power.draw [W]
-        for i, line in enumerate(output_nvidia.strip().split('\n')):
-            if not line.strip():
-                continue
+        lines = output_nvidia.strip().split('\n')
+        # Filter out any empty lines before counting GPUs
+        non_empty_lines = [line for line in lines if line.strip()]
+        num_gpus = len(non_empty_lines)
+
+        for i, line in enumerate(non_empty_lines):
+            # line is already stripped and guaranteed not empty here
             try:
                 parts = [p.strip() for p in line.split(',')]
+
                 if len(parts) == 3:
                     gpu_name = parts[0]
-                    # Remove unit suffixes and convert
-                    temp_celsius = float(parts[1].split(' ')[0]) if parts[1].split(' ')[
-                        0].isdigit() else None
-                    power_watts = float(parts[2].split(' ')[0]) if parts[2].split(
-                        ' ')[0].replace('.', '', 1).isdigit() else None  # Handle float
 
-                    # Use GPU name + index as key if multiple GPUs
-                    gpu_key = f"{gpu_name}_{i}" if len(
-                        output_nvidia.strip().split('\n')) > 1 else gpu_name
+                    # Safely parse temperature, handling 'N/A' or non-numeric values
+                    temp_celsius = None
+                    # Get the numeric part before ' [C]'
+                    temp_str = parts[1].split(' ')[0]
+                    if temp_str != 'N/A':
+                        try:
+                            temp_celsius = float(temp_str)
+                        except ValueError:
+                            # Log if temperature part wasn't a valid float/int
+                            logging.warning(
+                                f"Could not parse temperature '{temp_str}' for GPU {i} line: '{line}'")
+
+                    # Safely parse power, handling 'N/A' or non-numeric values
+                    power_watts = None
+                    # Get the numeric part before ' [W]'
+                    power_str = parts[2].split(' ')[0]
+                    # Check if it's not 'N/A' and looks like a number (int or float)
+                    if power_str != 'N/A' and (power_str.isdigit() or (power_str.count('.') == 1 and power_str.replace('.', '', 1).isdigit())):
+                        try:
+                            power_watts = float(power_str)
+                        except ValueError:
+                            # Log if power part wasn't a valid float/int
+                            logging.warning(
+                                f"Could not parse power draw '{power_str}' for GPU {i} line: '{line}'")
+
+                    # Use GPU name + index as key if multiple GPUs are found.
+                    # Using the index 'i' from the non_empty_lines loop ensures unique keys
+                    # even if GPU names are identical.
+                    gpu_key = f"{gpu_name}_{i}" if num_gpus > 1 else gpu_name
 
                     if temp_celsius is not None:
+                        # Store temperature using the generated key
                         sensor_data["temperatures_celsius"][f"{gpu_key}_GPU"] = temp_celsius
                         logging.debug(
                             f"Read nvidia-smi temp: {gpu_key}_GPU={temp_celsius}°C")
+                    # No else needed here; if temp is None, it's not added, and a warning is logged above if parsing failed.
 
                     if power_watts is not None:
+                        # Store power draw using the generated key
                         sensor_data["power_draw_watts"][f"{gpu_key}_GPU"] = power_watts
                         logging.debug(
                             f"Read nvidia-smi power: {gpu_key}_GPU={power_watts} W")
+                    # No else needed here; if power is None, it's not added, and a warning is logged above if parsing failed.
 
                 else:
-                    sensor_data["errors"].append(
-                        f"Unexpected nvidia-smi output format for line: {line}")
-                    logging.warning(sensor_data["errors"][-1])
+                    # Log unexpected number of columns in a line
+                    err_msg = f"Unexpected nvidia-smi output format (expected 3 parts) for line: '{line}'"
+                    sensor_data["errors"].append(err_msg)  # Add to error list
+                    logging.warning(err_msg)  # Log as warning
 
-            except (ValueError, IndexError) as e:
-                sensor_data["errors"].append(
-                    f"Error parsing nvidia-smi output line '{line}': {e}")
-                logging.error(sensor_data["errors"][-1])
             except Exception as e:
-                sensor_data["errors"].append(
-                    f"Unexpected error parsing nvidia-smi line '{line}': {e}")
-                logging.error(sensor_data["errors"][-1])
-
-    elif not success_nvidia:
-        if "command not found" in output_nvidia.lower():
-            sensor_data["notes"].append(
-                "'nvidia-smi' command not found (No NVIDIA GPU or driver not installed).")
-            logging.info("'nvidia-smi' command not found.")
-        else:
-            err_msg = f"Error executing 'nvidia-smi': {output_nvidia}"
-            sensor_data["errors"].append(err_msg)
-            logging.error(err_msg)
-    # else: success_nvidia is True but output_nvidia is empty (unlikely if GPU is present)
-
+                # Catch any other unexpected errors during line parsing
+                err_msg = f"Error parsing nvidia-smi output line '{line}': {e}"
+                sensor_data["errors"].append(err_msg)  # Add to error list
+                # Log as error with traceback
+                logging.error(err_msg, exc_info=True)
+    else:
+        # The command failed (run_command returned None).
+        # run_command already logged a specific warning/error (e.g., FileNotFoundError, CalledProcessError).
+        # Here, we just add a general note indicating the failure to collect GPU info.
+        sensor_data["notes"].append(
+            "Failed to collect NVIDIA GPU info via 'nvidia-smi'. See application logs for details (e.g., command not found, permissions, timeout, execution error)."
+        )
+        logging.info(
+            "Failed to collect NVIDIA GPU info via 'nvidia-smi'. Check previous log messages for the specific reason.")
     # --- 3. Notes on Other Potential Sources (IPMI, Direct i2c, Vendor Tools) ---
     sensor_data["notes"].append(
         "Sensor data collected from sysfs (/sys/class/thermal, /sys/class/hwmon, /sys/class/power_supply)"
-        " and potentially command-line tools ('sensors', 'nvidia-smi')."
+        " and potentially command-line tools ('nvidia-smi')."
     )
     sensor_data["notes"].append(
         "Comprehensive hardware monitoring often requires tools like 'ipmitool' (for IPMI),"

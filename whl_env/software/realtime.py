@@ -99,8 +99,8 @@ def get_cpu_scheduling_policy_info() -> Dict[str, Any]:
     # Use ps to list processes and grep for rtkit-daemon
     logging.info("Checking for rtkit-daemon process...")
     ps_rtkit_cmd = ['ps', 'aux']
-    success_ps, output_ps = run_command(ps_rtkit_cmd, timeout=5)
-    if success_ps and output_ps:
+    output_ps = run_command(ps_rtkit_cmd, timeout=5)
+    if output_ps:
         # Look for a line containing 'rtkit-daemon' but not the grep command itself
         if re.search(r'\n[^ ]+ +\d+.*? rtkit-daemon', output_ps):
             policy_info['rtkit_daemon_running'] = True
@@ -109,11 +109,6 @@ def get_cpu_scheduling_policy_info() -> Dict[str, Any]:
         else:
             policy_info['rtkit_daemon_running'] = False
             logging.info("rtkit-daemon process not found.")
-    elif not success_ps:
-        err_msg = f"Error executing ps to check rtkit-daemon: {output_ps}"
-        policy_info['rtkit_daemon_running'] = err_msg
-        errors.append(err_msg)
-        logging.error(err_msg)
     # else: success_ps is True but output_ps is empty (unlikely for 'ps aux')
 
     # 1c. Check for relevant cgroup controllers in /proc/cgroups
@@ -162,7 +157,8 @@ def get_cpu_scheduling_policy_info() -> Dict[str, Any]:
 
 def get_realtime_thread_stats() -> Dict[str, Any]:
     """
-    Collects statistics and details on real-time threads (FIFO/Round-Robin).
+    Collects statistics and details on real-time threads (FIFO/Round-Robin)
+    using the 'ps' command.
 
     Returns:
         Dict[str, Any]: Dictionary containing thread stats, errors, and notes.
@@ -172,129 +168,157 @@ def get_realtime_thread_stats() -> Dict[str, Any]:
         "total_rt_threads": 0,
         "fifo_threads": 0,
         "rr_threads": 0,
-        "top_rt_threads": [],  # List of dicts
+        "top_rt_threads": [],  # List of dicts for top N threads
     }
     errors: List[str] = []
     notes: List[str] = [
-        "Statistics derived from 'ps -eo pid,comm,cls,rtprio' output."]
+        "Statistics derived from 'ps -eo pid,comm,cls,rtprio' output.",
+        "Top RT threads list is limited to the top 10 by priority."
+    ]
 
     logging.info("Collecting real-time thread statistics...")
 
     # Use ps with specific format to list process/thread scheduling class and RT priority
-    # --sort=-rtprio sorts by RT priority descending
+    # -e : select all processes
+    # -o pid,comm,cls,rtprio : specify output format
+    # --sort=-rtprio : sort by RT priority descending
     ps_rt_cmd = ['ps', '-eo', 'pid,comm,cls,rtprio', '--sort=-rtprio']
-    success_ps_rt, output_ps_rt = run_command(ps_rt_cmd, timeout=10)
+    output_ps_rt = run_command(ps_rt_cmd, timeout=10)
 
-    if success_ps_rt and output_ps_rt:
+    if not output_ps_rt:
+        # run_command already logged the error/warning
+        err_msg = "Failed to execute or get output from 'ps -eo pid,comm,cls,rtprio'."
+        errors.append(err_msg)
+        logging.error(err_msg)
+    else:
         logging.info(
-            "'ps -eo ... --sort=-rtprio' command successful. Parsing output...")
+            "'ps -eo ... --sort=-rtprio' command successful. Parsing output..."
+        )
         lines = output_ps_rt.strip().split('\n')
-        if len(lines) > 1:  # Skip header line
-            header = lines[0].split()  # Expected: PID COMM CLS RTPRIO
-            # Find column indices (might vary slightly) - assuming fixed order for -eo
+
+        if len(lines) < 2:
+            logging.warning(
+                "'ps -eo ...' output contains only a header or is empty.")
+            # No data lines to parse
+            if len(lines) == 1:
+                notes.append(
+                    "ps command returned only header, no process data found.")
+            else:
+                notes.append("ps command returned empty output.")
+        else:
+            # Parse header to find column indices reliably
+            header_line = lines[0]
+            data_lines = lines[1:]
+            header_parts = header_line.split()
+
+            # Find index of each required column name in the header parts
             try:
-                # Using findall for more robust column splitting based on header positions
-                # Regex to find column values based on header positions, handling varying whitespace
-                # Get start/end positions of headers
-                header_pos = {name: header.find(name) for name in [
-                    'PID', 'COMM', 'CLS', 'RTPRIO']}
-                # Sort by position
-                sorted_headers = sorted(
-                    header_pos.items(), key=lambda item: item[1])
+                # Use .index() which is appropriate for lists
+                pid_idx = header_parts.index(
+                    'PID') if 'PID' in header_parts else -1
+                comm_idx = header_parts.index(
+                    'COMM') if 'COMM' in header_parts else -1
+                cls_idx = header_parts.index(
+                    'CLS') if 'CLS' in header_parts else -1
+                rtprio_idx = header_parts.index(
+                    'RTPRIO') if 'RTPRIO' in header_parts else -1
 
-                # Build regex pattern based on header positions to capture column values
-                # Example: PID\s+(.*?)\s+COMM\s+(.*?)\s+CLS\s+(.*?)\s+RTPRIO\s+(.*) -- simplified
-                # More robust: Use actual positions
-                # This is still tricky with variable length COMM. Let's rely on splitting by whitespace and index.
-                # ps -eo output *is* generally splitable by arbitrary whitespace for these fields.
-                # Let's re-parse the header to ensure indices.
-                parts = lines[0].split()
-                pid_idx = parts.index('PID') if 'PID' in parts else -1
-                comm_idx = parts.index('COMM') if 'COMM' in parts else -1
-                cls_idx = parts.index('CLS') if 'CLS' in parts else -1
-                rtprio_idx = parts.index('RTPRIO') if 'RTPRIO' in parts else -1
-
+                # Check if all required columns were found
                 if -1 in [pid_idx, comm_idx, cls_idx, rtprio_idx]:
-                    err_msg = f"Could not find required columns (PID, COMM, CLS, RTPRIO) in ps output header: {lines[0]}"
+                    missing_cols = [col for col, idx in zip(['PID', 'COMM', 'CLS', 'RTPRIO'], [
+                                                            pid_idx, comm_idx, cls_idx, rtprio_idx]) if idx == -1]
+                    err_msg = f"Could not find required columns {missing_cols} in ps output header: '{header_line}'"
                     errors.append(err_msg)
                     logging.error(err_msg)
-                    # Cannot parse data lines without correct indices
+                    # Cannot proceed parsing data lines without correct indices
                 else:
-                    for line in lines[1:]:
+                    # Indices found, now parse data lines
+                    for i, line in enumerate(data_lines):
                         if not line.strip():
-                            continue
-                        # Split by arbitrary whitespace. This is generally safe for ps -o output.
+                            continue  # Skip empty lines
+
+                        # Split data line by arbitrary whitespace
                         parts = line.split()
 
-                        # Ensure enough parts are present before accessing indices
-                        if len(parts) > max(pid_idx, comm_idx, cls_idx, rtprio_idx):
+                        # Check if the line has enough parts based on the maximum expected index
+                        required_min_parts = max(
+                            pid_idx, comm_idx, cls_idx, rtprio_idx) + 1
+
+                        if len(parts) >= required_min_parts:
                             try:
+                                # Access parts using the found indices
                                 pid = int(parts[pid_idx])
-                                # Comm might be truncated by ps
+                                # COMM might be truncated by ps
                                 comm = parts[comm_idx]
                                 cls = parts[cls_idx]
                                 rtprio_str = parts[rtprio_idx]
 
+                                # Process only Real-Time threads (CLS is RR or FF)
                                 if cls in ['RR', 'FF']:
                                     thread_stats["total_rt_threads"] += 1
                                     if cls == 'RR':
                                         thread_stats['rr_threads'] += 1
-                                    else:  # FF
+                                    else:  # CLS == 'FF' (FIFO)
                                         thread_stats['fifo_threads'] += 1
 
-                                    # Try to parse RT priority (RTPRIO column might be '-' for non-RT)
+                                    # Parse RT priority (RTPRIO column might be '-' for non-RT,
+                                    # but we are only processing RR/FF here)
                                     try:
+                                        # RTPRIO should be an integer for RR/FF, but handle '-' defensively
                                         rtprio = int(
                                             rtprio_str) if rtprio_str != '-' else 0
                                     except ValueError:
-                                        rtprio = 0  # Should not happen for RR/FF but safety
+                                        # Should not happen for valid RT threads, but log if it does
+                                        logging.warning(
+                                            f"Could not parse RTPRIO '{rtprio_str}' as int for line {i+2}: '{line}'")
+                                        rtprio = 0  # Default to 0 if parsing fails unexpectedly
 
-                                    # Store top N threads (e.g., top 10) by priority
-                                    # Keep list size reasonable, sort by priority descending
+                                    # Store top N threads by priority
                                     thread_entry = {
                                         "pid": pid,
                                         "comm": comm,
                                         "class": cls,
                                         "priority": rtprio
                                     }
+                                    # Add and maintain the top N list
                                     thread_stats['top_rt_threads'].append(
                                         thread_entry)
-                                    # Sort and trim after adding to keep list small
-                                    thread_stats['top_rt_threads'].sort(
-                                        key=lambda x: x['priority'], reverse=True)
-                                    # Keep only top 10
-                                    thread_stats['top_rt_threads'] = thread_stats['top_rt_threads'][:10]
+                                    # Keep list size limited (e.g., top 10)
+                                    if len(thread_stats['top_rt_threads']) > 10:
+                                        # Sort by priority descending, then trim
+                                        thread_stats['top_rt_threads'].sort(
+                                            key=lambda x: x['priority'], reverse=True)
+                                        thread_stats['top_rt_threads'] = thread_stats['top_rt_threads'][:10]
 
                             except (ValueError, IndexError) as e:
-                                err_msg = f"Error parsing ps RT data line '{line}': {e}"
+                                # Error accessing parts or converting type (e.g., PID, RTPRIO)
+                                err_msg = f"Error parsing data columns for line {i+2}: '{line}' - {e}"
                                 errors.append(err_msg)
                                 logging.error(err_msg)
-                            except Exception as e:  # Catch other unexpected errors
-                                err_msg = f"Unexpected error processing ps RT data line '{line}': {e}"
+                            except Exception as e:  # Catch other unexpected errors during line processing
+                                err_msg = f"Unexpected error processing line {i+2}: '{line}' - {e}"
                                 errors.append(err_msg)
                                 logging.error(err_msg)
                         else:
-                            # Line doesn't have enough columns based on header indices
-                            err_msg = f"Skipping ps RT line with insufficient columns: {line}"
-                            # Often header or summary lines, or malformed
-                            logging.warning(err_msg)
-                            # errors.append(err_msg) # Decide if this warrants an error or just warning
+                            # Line doesn't have enough columns compared to the header structure
+                            logging.warning(
+                                f"Skipping malformed line {i+2} with insufficient columns: '{line}'")
+                            # Decide if this warrants an error or just a warning. Warning is less noisy.
+                            # errors.append(f"Malformed line {i+2} skipped: '{line}'")
 
-            except ValueError as e:  # Header parsing error
-                err_msg = f"Error parsing ps RT header line '{lines[0]}': {e}"
+            except ValueError as e:  # Error finding column index in header_parts
+                err_msg = f"Error finding column index in header '{header_line}': {e}"
+                errors.append(err_msg)
+                logging.error(err_msg)
+            except Exception as e:  # Catch other unexpected errors during header processing
+                err_msg = f"Unexpected error processing header line '{header_line}': {e}"
                 errors.append(err_msg)
                 logging.error(err_msg)
 
-        elif len(lines) == 1:  # Only header
-            logging.info(
-                "'ps -eo ...' returned only header, no processes/threads found?")
-        # else: output was empty (handled by success check)
-
-    elif not success_ps_rt:
-        err_msg = f"Error executing 'ps -eo ...': {output_ps_rt}"
-        errors.append(err_msg)
-        notes[0] = f"Statistics could not be fully derived due to 'ps' execution error: {output_ps_rt}"
-        logging.error(err_msg)
+    # Final sort for the top threads list in case items were added without immediate sorting
+    if thread_stats['top_rt_threads']:
+        thread_stats['top_rt_threads'].sort(
+            key=lambda x: x['priority'], reverse=True)
 
     return {'thread_stats': thread_stats, 'errors': errors, 'notes': notes}
 
@@ -316,9 +340,9 @@ def get_system_latency_analysis_info() -> Dict[str, Any]:
 
     # Check if cyclictest command is available
     which_cyclictest_cmd = ['which', 'cyclictest']
-    success_which, output_which = run_command(which_cyclictest_cmd, timeout=5)
+    output_which = run_command(which_cyclictest_cmd, timeout=5)
 
-    if success_which and output_which.strip():
+    if output_which:
         latency_info['cyclictest_available'] = True
         latency_info['cyclictest_path'] = output_which.strip()
         notes.append(
@@ -328,21 +352,6 @@ def get_system_latency_analysis_info() -> Dict[str, Any]:
             " This function only reports availability, it does NOT run cyclictest."
         )
         logging.info("Cyclictest command found.")
-    elif not success_which:
-        latency_info['cyclictest_available'] = False
-        latency_info['cyclictest_path'] = None
-        note_msg = (
-            "'cyclictest' command not found. It is the standard tool for measuring Linux RT latency."
-            " Install 'rt-tests' package on RT kernel systems to get it."
-        )
-        notes.append(note_msg)
-
-        if "command not found" in output_which.lower():
-            logging.warning(note_msg)
-        else:
-            err_msg = f"Error executing 'which cyclictest': {output_which}"
-            errors.append(err_msg)
-            logging.error(err_msg)
 
     # Placeholder for parsing cyclictest results if needed in the future
     # latency_info['cyclictest_last_results'] = "Parsing not implemented" # Example

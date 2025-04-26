@@ -520,7 +520,7 @@ class SensorHealthChecker:
             A dictionary containing the results for each sensor and aggregated errors.
             Example Structure:
             {
-                'overall_status': 'PASS' or 'FAIL',
+                'report_status': 'PASS' or 'FAIL',
                 'sensor_results': [
                     {
                         'name': 'FrontLiDAR',
@@ -528,7 +528,7 @@ class SensorHealthChecker:
                         'connectivity_check': {'status': 'PASS', ...},
                         'data_stream_check': {'status': 'SKIPPED', ...}, # or PASS/FAIL
                         'internal_health_check': {'status': 'SKIPPED', ...}, # or PASS/FAIL
-                        'overall_status': 'PASS' or 'FAIL', # Overall for this sensor
+                        'report_status': 'PASS' or 'FAIL', # Overall for this sensor
                         'errors': [...] # Errors specific to this sensor
                     },
                     ...
@@ -538,7 +538,7 @@ class SensorHealthChecker:
         """
         if self.initialization_error:
             return {
-                'overall_status': 'FAIL',
+                'report_status': 'FAIL',
                 'initialization_error': self.initialization_error,
                 'aggregated_errors': [self.initialization_error]
             }
@@ -546,7 +546,7 @@ class SensorHealthChecker:
         logging.info("Starting sensor health checks...")
         all_sensor_results: List[Dict[str, Any]] = []
         aggregated_errors: List[str] = []
-        overall_status = 'PASS'
+        report_status = 'PASS'
 
         for sensor_config in self.config:
             sensor_name = sensor_config.get('name', 'UnknownSensor')
@@ -557,7 +557,7 @@ class SensorHealthChecker:
             sensor_result: Dict[str, Any] = {
                 'name': sensor_name,
                 'type': sensor_type,
-                'overall_status': 'PASS',  # Assume pass unless a check fails
+                'report_status': 'PASS',  # Assume pass unless a check fails
                 'errors': []
             }
 
@@ -565,7 +565,7 @@ class SensorHealthChecker:
             conn_check_result = self.check_connectivity(sensor_config)
             sensor_result['connectivity_check'] = conn_check_result
             if conn_check_result['status'] == 'FAIL':
-                sensor_result['overall_status'] = 'FAIL'
+                sensor_result['report_status'] = 'FAIL'
                 sensor_result['errors'].extend(
                     conn_check_result.get('errors', []))
                 aggregated_errors.extend(
@@ -582,7 +582,7 @@ class SensorHealthChecker:
             data_stream_check_result = self.check_data_stream(sensor_config)
             sensor_result['data_stream_check'] = data_stream_check_result
             if data_stream_check_result['status'] == 'FAIL':
-                sensor_result['overall_status'] = 'FAIL'
+                sensor_result['report_status'] = 'FAIL'
                 sensor_result['errors'].extend(
                     data_stream_check_result.get('errors', []))
                 aggregated_errors.extend(
@@ -594,24 +594,24 @@ class SensorHealthChecker:
                 sensor_config)
             sensor_result['internal_health_check'] = internal_health_check_result
             if internal_health_check_result['status'] == 'FAIL':
-                sensor_result['overall_status'] = 'FAIL'
+                sensor_result['report_status'] = 'FAIL'
                 sensor_result['errors'].extend(
                     internal_health_check_result.get('errors', []))
                 aggregated_errors.extend(
                     [f"{sensor_name} Internal Health: {err}" for err in internal_health_check_result.get('errors', [])])
 
             # If any check for this sensor failed, update overall status
-            if sensor_result['overall_status'] == 'FAIL':
-                overall_status = 'FAIL'
+            if sensor_result['report_status'] == 'FAIL':
+                report_status = 'FAIL'
 
             all_sensor_results.append(sensor_result)
             logging.info(
-                f"--- Sensor {sensor_name} finished with overall status: {sensor_result['overall_status']} ---")
+                f"--- Sensor {sensor_name} finished with overall status: {sensor_result['report_status']} ---")
 
         logging.info("Finished all sensor health checks.")
 
         return {
-            'overall_status': overall_status,
+            'report_status': report_status,
             'sensor_results': all_sensor_results,
             'aggregated_errors': aggregated_errors
         }
@@ -746,13 +746,13 @@ if __name__ == "__main__":
 
     # Example of processing the report
     print("\n--- Report Summary ---")
-    print(f"Overall Status: {health_report.get('overall_status')}")
+    print(f"Overall Status: {health_report.get('report_status')}")
 
     if health_report.get('sensor_results'):
         print("\nSensor Details:")
         for sensor_result in health_report['sensor_results']:
             name = sensor_result.get('name', 'N/A')
-            status = sensor_result.get('overall_status', 'N/A')
+            status = sensor_result.get('report_status', 'N/A')
             print(f"  {name}: {status}")
             # Optionally print details for failed checks
             if status == 'FAIL':

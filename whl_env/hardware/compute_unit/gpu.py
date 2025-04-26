@@ -78,9 +78,9 @@ def get_gpu_info() -> Dict[str, Any]:
         '--query-gpu=name,gpu_bus_id,vbios_version,driver_version,memory.total',
         '--format=csv,noheader'
     ]
-    success, output = run_command(nvidia_smi_cmd, timeout=10)
+    output = run_command(nvidia_smi_cmd, timeout=10)
 
-    if success and output:
+    if output:
         # nvidia-smi outputs CSV: name, bus_id, vbios, driver, total_memory [MiB]
         logging.info("nvidia-smi command successful. Parsing output...")
         for line in output.strip().split('\n'):
@@ -149,9 +149,9 @@ def get_gpu_info() -> Dict[str, Any]:
         # 0300: Display controller (VGA compatible controller, etc.)
         # 0302: 3D controller
         lspci_cmd = ['lspci', '-nn', '-d', '::0300::,::0302::']
-        success_lspci, output_lspci = run_command(lspci_cmd, timeout=5)
+        output_lspci = run_command(lspci_cmd, timeout=5)
 
-        if success_lspci and output_lspci:
+        if output_lspci:
             logging.info("lspci command successful. Parsing output...")
             # Output format is typically like:
             # "01:00.0 VGA compatible controller [0300]: NVIDIA Corporation TU104 [GeForce RTX 2080] [10de:1e87] (rev a1)"
@@ -222,18 +222,6 @@ def get_gpu_info() -> Dict[str, Any]:
                     errors.append(
                         f"Error parsing lspci output line '{line}': {e}")
                     logging.error(errors[-1])
-
-        elif not success_lspci:
-            # Handle command execution errors for lspci
-            if "command not found" in output_lspci.lower():
-                logging.info(
-                    "lspci command not found. Cannot list PCI devices.")
-                errors.append(
-                    "lspci command not found. Cannot list PCI graphics devices.")
-            else:
-                errors.append(
-                    f"Error executing lspci for graphics cards: {output_lspci}")
-                logging.error(errors[-1])
         # else: success_lspci is True but output_lspci is empty
         # This is not an error, it means no matching graphics devices were found by lspci.
 

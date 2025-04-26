@@ -16,9 +16,8 @@
 
 
 import time
-import sys
 import logging
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 
 # Configure basic logging if not already configured
 # In a real application, you would configure logging more elaborately

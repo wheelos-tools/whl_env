@@ -22,7 +22,7 @@ from typing import Dict, List, Any
 from whl_env.utils import get_file_hash, collect_files_and_hashes, run_command
 
 
-def system_info() -> Dict[str, Any]:
+def get_system_info() -> Dict[str, Any]:
     """
     Collects basic system information including OS, Python version, and GCC version.
 
@@ -305,7 +305,7 @@ def main():
 
     # Collect System Info
     print("\n--- System Information ---")
-    sys_info = system_info()
+    sys_info = get_system_info()
     all_config_data.update(sys_info)
     # Print preview
     for key, value in sys_info['system_info'].items():
